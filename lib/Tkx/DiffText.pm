@@ -3,7 +3,7 @@
 # Michael J. Carman <mjcarman@cpan.org>
 # Last Modified: 1/05/2009 10:24AM
 #===============================================================================
-BEGIN {require 5.006}
+use 5.006;
 package Tkx::DiffText;
 use strict;
 use warnings;
@@ -244,8 +244,11 @@ sub _make_pane {
 		-width          => 1, # size controlled via parent so that panes are
 		-height         => 1, # always balanced even when window resized.
 		-borderwidth    => 0,
+		-wrap           => 'none',
 		-xscrollcommand => "$hsb set",
+		-yscrollcommand => "$vsb set",
 	);
+	
 
 	Tkx::grid($gw, $tw, $vsb, -sticky => 'nsew');
 	Tkx::grid($hsb, '-', -sticky => 'ew');
@@ -263,7 +266,7 @@ sub _make_pane {
 	$tw->tag('configure', 'cur', @{$diffcolors->{cur}});
 	$tw->tag('raise', 'sel');
 
-	$hsb->configure(-command => [$tw, 'xview']);
+	$hsb->configure(-command => [$tw->_mpath('xview'), 'xview']);
 
 	my @slw;  # scroll-locked widgets
 
@@ -275,8 +278,10 @@ sub _make_pane {
 		Tkx::grid('forget', $gw) unless $data->{-gutter};
 	}
 
+	# TBD: This must be translated to TCL, as the scrollbar bindings happen in Tcl/Tk
 	# scrollbar controls both text and gutter (if visible)
-	$vsb->configure(-command => sub { $_->yview(@_) foreach (@slw) });
+#	$vsb->configure(-command => sub { $_->yview(@_) foreach (@slw) });
+	$vsb->configure(-command => [$tw->_mpath('yview'), 'yview']);
 
 	# widgets will have their yscrollcommand set *after* we're done creating
 	# all of the panes so that we can regulate the synchronized scrolling
@@ -327,6 +332,103 @@ sub _scrollbar {
 
 sub _rescale_map {}
 sub _scroll_panes {}
+sub _reset_tags() {}
+
+#-------------------------------------------------------------------------------
+# Method  : load
+# Purpose : Load data into one of the text panes.
+# Notes   : 
+#-------------------------------------------------------------------------------
+sub load {
+	my $self  = $_[0];
+	my $where = lc $_[1];
+	my $ok    = 1;
+
+	unless ($where =~ /^[ab]$/) {
+		carp("Invalid load destination '$_[1]'");
+		return;
+	}
+
+	$self->_data->{_scroll_lock} = 0;
+
+	$self->_kid('map')->delete('all');
+	$self->_reset_tags('a');
+	$self->_reset_tags('b');
+
+	my $tw = $self->_kid("$where.text");
+	my $gw = $self->_kid("$where.gutter");
+	my $ta = $self->_data->{_textarray}{$where};
+
+	$gw->configure(-state => 'normal');
+	$gw->delete('1.0', 'end');
+	$tw->delete('1.0', 'end');
+
+	Tkx::update('idletasks');
+
+	# Accept naive user input
+	$_[2] = ${$_[2]} if ref $_[2] eq 'REF';  # \*FH{IO} instead of *FH{IO}
+	$_[2] = *{$_[2]} if ref $_[2] eq 'GLOB'; # \*FH     instead of *FH
+
+	if (ref $_[2]) {
+		if (ref $_[2] eq 'ARRAY') {
+			# assume lines of file data
+			$tw->insert('end', $_) foreach @{$_[2]};
+		}
+		elsif ($_[2]->can('getline')) {
+			# IO::File must be loaded for this to work
+			while (my $x = $_[2]->getline) {
+				$tw->insert('end', $x); # assume IO::File or equiv
+			}
+		}
+		else {
+			carp(sprintf("Don't know how to load from '%s' reference", ref $_[2]));
+			$ok = 0;
+		}
+	}
+	elsif ($_[2] =~ /^\*(\w*::)+\$?\w+$/) {
+		# GLOB; assume open filehandle
+		# copy to scalar so that <> interprets it as a filehandle
+		# and not a glob pattern. cf. perlop - I/O Operators
+		my $fh = $_[2];
+		local $_;
+		do { $tw->insert('end', $_) } while (<$fh>);
+	}
+	elsif ($_[2] =~ /\n/) {
+		# assume contents of slurped file
+		$tw->insert('end', $_[2]);
+	}		
+	else {
+		# assume file name
+		# Need two-arg open() for perls < v5.6
+		# what version added open($fh...) in place of open(FH...)
+		local *FH;
+		if (open(FH, "< $_[2]")) {
+			local $_;
+			do { $tw->insert('end', $_) } while (<FH>);
+			close(FH);
+		}
+		else {
+			carp("Can't read file '$_[2]' [$!]");
+			$ok = 0;
+		}
+	}
+
+	if ($tw->get('end - 2 chars', 'end') ne "\n\n") {
+		# The last line of file doesn't contain a newline. This horks up 
+		# synchronized scrolling, so we add one to prevent that from happening.
+		$tw->insert('end', "\n");
+	}	
+
+	my $n = $ok ? @$ta       :  0;
+	my $w = $ok ? length($n) : -1;
+
+	$gw->insert('end', sprintf("%${w}i\n", $_)) foreach (1 .. $n);
+	$gw->configure(-width => $w + 1);
+	$gw->configure(-state => 'disabled');
+
+	Tkx::update('idletasks');
+	return $ok;
+}
 
 1;
 __END__
