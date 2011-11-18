@@ -246,7 +246,6 @@ sub _make_pane {
 		-borderwidth    => 0,
 		-wrap           => 'none',
 		-xscrollcommand => "$hsb set",
-		-yscrollcommand => "$vsb set",
 	);
 	
 
@@ -268,24 +267,34 @@ sub _make_pane {
 
 	$hsb->configure(-command => [$tw->_mpath('xview'), 'xview']);
 
-	my @slw;  # scroll-locked widgets
+	Tkx::grid('forget', $gw) unless $data->{-gutter};
 
-	if ($data->{-gutter}) {
-		@slw = ($tw, $gw);
-	}
-	else {
-		@slw = $tw;  # Don't lock the gutter if it's not visible!
-		Tkx::grid('forget', $gw) unless $data->{-gutter};
-	}
+	# Delegates for ROText widget methods
+	my ($twm, $gwm) = map { $_->_mpath } ($tw, $gw);
 
-	# TBD: This must be translated to TCL, as the scrollbar bindings happen in Tcl/Tk
-	# scrollbar controls both text and gutter (if visible)
-#	$vsb->configure(-command => sub { $_->yview(@_) foreach (@slw) });
-	$vsb->configure(-command => [$tw->_mpath('yview'), 'yview']);
+	# Scrollbar bindings must happen in the Tcl layer, not Perl.
 
-	# widgets will have their yscrollcommand set *after* we're done creating
-	# all of the panes so that we can regulate the synchronized scrolling
-	# between them.
+	# TODO: handle synchronized scrolling of A/B panes
+	# Can we leave the yview_[ab] here? (i.e. have each vertical scrollbar
+	# control its two text widgets) The yset_[ab] will have to be moved
+	# to _scroll_panes for sure.
+
+	Tkx::eval(<<EOT);
+		$vsb configure -command yview_$name
+		$gwm configure -yscrollcommand yset_$name
+		$twm configure -yscrollcommand yset_$name
+
+		proc yset_$name {args} {
+			$vsb set {*}\$args
+			yview_$name moveto [lindex [$vsb get] 0]
+			
+		}
+
+		proc yview_$name {args} {
+			$gwm yview {*}\$args
+			$twm yview {*}\$args
+		}
+EOT
 
 	return {
 		frame         => $f,
@@ -294,7 +303,7 @@ sub _make_pane {
 		gutter        => $gw,
 		text          => $tw,
 		textarray     => \@text,
-		scroll_locked => \@slw,
+		scroll_locked => [$data->{-gutter} ? ($tw, $gw) : ($tw)],
 	};
 
 }
